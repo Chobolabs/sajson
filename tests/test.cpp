@@ -2,6 +2,8 @@
 #include <sajson.h>
 #include <sajson_ostream.h>
 
+#include <functional>
+
 #include <UnitTest++.h>
 
 using sajson::TYPE_ARRAY;
@@ -30,19 +32,35 @@ inline bool success(const document& doc) {
     return true;
 }
 
+class count_allocator : public sajson::allocator {
+public:
+    void* allocate(size_t size) override {
+        ++allocs;
+        return new uint8_t[size];
+    }
+    void deallocate(const void* buf) override {
+        ++deallocs;
+        delete[] static_cast<const uint8_t*>(buf);
+    }
+    int allocs = 0;
+    int deallocs = 0;
+};
+
 #define ABSTRACT_TEST(name) \
-    static void name##internal(sajson::document (*parse)(const sajson::literal&)); \
-    TEST(single_allocation_##name) { \
+    static void name##internal(std::function<sajson::document(const sajson::literal&)> parse); \
+    TEST(default_allocation_##name) { \
         name##internal([](const sajson::literal& literal) { \
-            return sajson::parse(sajson::single_allocation(), literal); \
+            return sajson::parse(literal); \
         }); \
     } \
-    TEST(dynamic_allocation_##name) { \
-        name##internal([](const sajson::literal& literal) { \
-            return sajson::parse(sajson::dynamic_allocation(), literal); \
+    TEST(counting_allocation_##name) { \
+        count_allocator alloc; \
+        name##internal([&alloc](const sajson::literal& literal) { \
+            return sajson::parse(literal, &alloc); \
         }); \
+        CHECK_EQUAL(alloc.allocs, alloc.deallocs); \
     } \
-    static void name##internal(sajson::document (*parse)(const sajson::literal&))
+    static void name##internal(std::function<sajson::document(const sajson::literal&)> parse)
 
 ABSTRACT_TEST(empty_array) {
     const sajson::document& document = parse(literal("[]"));
@@ -51,6 +69,7 @@ ABSTRACT_TEST(empty_array) {
     CHECK_EQUAL(true, document.is_valid());
     CHECK_EQUAL(TYPE_ARRAY, root.get_type());
     CHECK_EQUAL(0u, root.get_length());
+
 }
 
 ABSTRACT_TEST(array_whitespace) {
@@ -733,93 +752,96 @@ SUITE(errors) {
 
     ABSTRACT_TEST(error_extension) {
         using namespace sajson;
-        mutable_string_view dummy;
+
+        sajson::internal::default_allocator dummy_alloc;
+        data_storage dummy(nullptr, false, nullptr, 0, dummy_alloc);
+
         {
-            document d(dummy, 0, 0, ERROR_SUCCESS, 0);
+            document d(std::move(dummy), 0, 0, ERROR_SUCCESS, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "no error");
         }
         {
-            document d(dummy, 0, 0, ERROR_OUT_OF_MEMORY, 0);
+            document d(std::move(dummy), 0, 0, ERROR_OUT_OF_MEMORY, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "out of memory");
         }
         {
-            document d(dummy, 0, 0, ERROR_UNEXPECTED_END, 0);
+            document d(std::move(dummy), 0, 0, ERROR_UNEXPECTED_END, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "unexpected end of input");
         }
         {
-            document d(dummy, 0, 0, ERROR_MISSING_ROOT_ELEMENT, 0);
+            document d(std::move(dummy), 0, 0, ERROR_MISSING_ROOT_ELEMENT, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "missing root element");
         }
         {
-            document d(dummy, 0, 0, ERROR_BAD_ROOT, 0);
+            document d(std::move(dummy), 0, 0, ERROR_BAD_ROOT, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "document root must be object or array");
         }
         {
-            document d(dummy, 0, 0, ERROR_EXPECTED_COMMA, 0);
+            document d(std::move(dummy), 0, 0, ERROR_EXPECTED_COMMA, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "expected ,");
         }
         {
-            document d(dummy, 0, 0, ERROR_MISSING_OBJECT_KEY, 0);
+            document d(std::move(dummy), 0, 0, ERROR_MISSING_OBJECT_KEY, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "missing object key");
         }
         {
-            document d(dummy, 0, 0, ERROR_EXPECTED_COLON, 0);
+            document d(std::move(dummy), 0, 0, ERROR_EXPECTED_COLON, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "expected :");
         }
         {
-            document d(dummy, 0, 0, ERROR_EXPECTED_END_OF_INPUT, 0);
+            document d(std::move(dummy), 0, 0, ERROR_EXPECTED_END_OF_INPUT, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "expected end of input");
         }
         {
-            document d(dummy, 0, 0, ERROR_UNEXPECTED_COMMA, 0);
+            document d(std::move(dummy), 0, 0, ERROR_UNEXPECTED_COMMA, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "unexpected comma");
         }
         {
-            document d(dummy, 0, 0, ERROR_EXPECTED_VALUE, 0);
+            document d(std::move(dummy), 0, 0, ERROR_EXPECTED_VALUE, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "expected value");
         }
         {
-            document d(dummy, 0, 0, ERROR_EXPECTED_NULL, 0);
+            document d(std::move(dummy), 0, 0, ERROR_EXPECTED_NULL, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "expected 'null'");
         }
         {
-            document d(dummy, 0, 0, ERROR_EXPECTED_FALSE, 0);
+            document d(std::move(dummy), 0, 0, ERROR_EXPECTED_FALSE, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "expected 'false'");
         }
         {
-            document d(dummy, 0, 0, ERROR_EXPECTED_TRUE, 0);
+            document d(std::move(dummy), 0, 0, ERROR_EXPECTED_TRUE, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "expected 'true'");
         }
         {
-            document d(dummy, 0, 0, ERROR_MSSING_EXPONENT, 0);
+            document d(std::move(dummy), 0, 0, ERROR_MSSING_EXPONENT, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "missing exponent");
         }
         {
-            document d(dummy, 0, 0, ERROR_ILLEGAL_CODEPOINT, -123);
+            document d(std::move(dummy), 0, 0, ERROR_ILLEGAL_CODEPOINT, -123);
             CHECK_EQUAL(d._internal_get_error_text(), "illegal unprintable codepoint in string");
         }
         {
-            document d(dummy, 0, 0, ERROR_INVALID_UNICODE_ESCAPE, 0);
+            document d(std::move(dummy), 0, 0, ERROR_INVALID_UNICODE_ESCAPE, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "invalid character in unicode escape");
         }
         {
-            document d(dummy, 0, 0, ERROR_UNEXPECTED_END_OF_UTF16, 0);
+            document d(std::move(dummy), 0, 0, ERROR_UNEXPECTED_END_OF_UTF16, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "unexpected end of input during UTF-16 surrogate pair");
         }
         {
-            document d(dummy, 0, 0, ERROR_EXPECTED_U, 0);
+            document d(std::move(dummy), 0, 0, ERROR_EXPECTED_U, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "expected \\u");
         }
         {
-            document d(dummy, 0, 0, ERROR_INVALID_UTF16_TRAIL_SURROGATE, 0);
+            document d(std::move(dummy), 0, 0, ERROR_INVALID_UTF16_TRAIL_SURROGATE, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "invalid UTF-16 trail surrogate");
         }
         {
-            document d(dummy, 0, 0, ERROR_UNKNOWN_ESCAPE, 0);
+            document d(std::move(dummy), 0, 0, ERROR_UNKNOWN_ESCAPE, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "unknown escape");
         }
         {
-            document d(dummy, 0, 0, ERROR_INVALID_UTF8, 0);
+            document d(std::move(dummy), 0, 0, ERROR_INVALID_UTF8, 0);
             CHECK_EQUAL(d._internal_get_error_text(), "invalid UTF-8");
         }
     }
@@ -975,19 +997,7 @@ ABSTRACT_TEST(object_array_with_integers) {
     CHECK_EQUAL(7890U, node2.get_number_value());
 }
 
-SUITE(allocator_tests) {
-    TEST(single_allocation_into_existing_memory) {
-        size_t buffer[2];
-        const sajson::document& document = sajson::parse(
-            sajson::single_allocation(buffer, 2),
-            literal("[]"));
-        assert(success(document));
-        const value& root = document.get_root();
-        CHECK_EQUAL(TYPE_ARRAY, root.get_type());
-        CHECK_EQUAL(0u, root.get_length());
-        CHECK_EQUAL(0u, buffer[1]);
-    }
-}
+
 
 int main() {
     return UnitTest::RunAllTests();
